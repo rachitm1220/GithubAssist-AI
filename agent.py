@@ -5,7 +5,7 @@ import requests
 import re
 
 # Set Gemini key
-os.environ["GOOGLE_API_KEY"] = 'AIzaSyCugxRGLyaztgpwiDD88Xx5ihduiMlY1ew'  # TODO: Add your Gemini API key
+os.environ["GOOGLE_API_KEY"] = ''  # TODO: Add your Gemini API key
 
 from langchain.chat_models import init_chat_model
 from langgraph.graph import StateGraph, START, END
