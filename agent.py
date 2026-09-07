@@ -1,20 +1,42 @@
 import os
-import streamlit as st
-import base64
-import requests
 import re
-
-# Set Gemini key
-os.environ["GOOGLE_API_KEY"] = ''  # TODO: Add your Gemini API key
+import streamlit as st
 
 from langchain.chat_models import init_chat_model
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import StateGraph
 from langgraph.checkpoint.memory import MemorySaver
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from typing import TypedDict, Optional
 
-# Initialize Gemini model
-llm = init_chat_model("google_genai:gemini-2.5-flash", temperature=0)
+
+def _resolve_gemini_key() -> Optional[str]:
+    """
+    Resolve the Gemini API key from (in order of priority):
+    1. st.session_state (set via the sidebar in app.py)
+    2. st.secrets["GOOGLE_API_KEY"]  (for deployed / Streamlit Cloud usage)
+    3. the GOOGLE_API_KEY environment variable
+    """
+    key = st.session_state.get("google_api_key")
+    if key:
+        return key
+    try:
+        if "GOOGLE_API_KEY" in st.secrets:
+            return st.secrets["GOOGLE_API_KEY"]
+    except Exception:
+        pass
+    return os.environ.get("GOOGLE_API_KEY")
+
+
+def get_llm():
+    """Lazily build the Gemini chat model once a key is available."""
+    api_key = _resolve_gemini_key()
+    if not api_key:
+        raise ValueError(
+            "No Gemini API key found. Add it in the sidebar, or set GOOGLE_API_KEY "
+            "as an environment variable / Streamlit secret."
+        )
+    os.environ["GOOGLE_API_KEY"] = api_key
+    return init_chat_model("google_genai:gemini-2.5-flash", temperature=0)
 
 def extract_code_only(output: str) -> str:
     """
@@ -46,7 +68,7 @@ class CodeImproveState(TypedDict):
     improved_code: Optional[str]
     corrections_summary: Optional[str]
 
-def detect_and_convert_code_language(state: CodeImproveState) -> CodeImproveState:
+def detect_and_convert_code_language(state: CodeImproveState, llm) -> CodeImproveState:
     """
     Detect the language of the current code and convert it into the correct language
     based on the file type provided in the state.
@@ -78,60 +100,10 @@ def detect_and_convert_code_language(state: CodeImproveState) -> CodeImproveStat
     return state
 
 def improve_code_node(state: CodeImproveState) -> CodeImproveState:
+    llm = get_llm()
+
     # Step 1: Detect and convert the code language if needed
-    state = detect_and_convert_code_language(state)
-    prompt_examples=[]
-    # prompt_examples.append(HumanMessage(content=f"""
-    #     def multiply(x y):
-    #     result = x * y
-    #         return result
-
-    #     def find_max(a, b, c)
-    #     if a > b and c:
-    #     return a
-    #     elif b > c
-    #         return b
-    #     else
-    #     return c
-
-    #     def is_even(n):
-    #         if n % 2 = 0:
-    #         return True
-    #         return False
-
-    #     for i in range(1, 6)
-    #         print("Is", i, "even?", is_even(i))
-
-    #     print("Max of 3, 5, 2 is:", find_max(3, 5, 2))
-
-    #     print("Product of 4 and 5 is", multiply(4, 5))
-
-    # """))
-    # prompt_examples.append(AIMessage(content="""
-    #     def multiply(x, y):
-    #         result = x * y
-    #         return result
-
-    #     def find_max(a, b, c):
-    #         if a > b and a > c:
-    #             return a
-    #         elif b > c:
-    #             return b
-    #         else:
-    #             return c
-
-    #     def is_even(n):
-    #         if n % 2 == 0:
-    #             return True
-    #         return False
-
-    #     for i in range(1, 6):
-    #         print("Is", i, "even?", is_even(i))
-
-    #     print("Max of 3, 5, 2 is:", find_max(3, 5, 2))
-
-    #     print("Product of 4 and 5 is", multiply(4, 5))
-    # """))
+    state = detect_and_convert_code_language(state, llm)
 
     prompt_code = SystemMessage(content=f"""
     You are a code improvement assistant.
@@ -153,7 +125,7 @@ def improve_code_node(state: CodeImproveState) -> CodeImproveState:
     File Type: {state['file_type']}
     """)
 
-    response_improved = llm.invoke(prompt_examples + [prompt_code, HumanMessage(content=state['file_content'])])
+    response_improved = llm.invoke([prompt_code, HumanMessage(content=state['file_content'])])
     raw_output = response_improved.content
     cleaned_code = extract_code_only(raw_output)
     state['improved_code'] = cleaned_code
